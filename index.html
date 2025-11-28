@@ -1,0 +1,430 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Base62 Encrypted Wallet Decryptor</title>
+    <script src="https://cdn.jsdelivr.net/npm/ethers@6.15.0/dist/ethers.umd.min.js"></script>
+    <style>
+        :root {
+            --bg-color: #1a1a1a;
+            --text-color: #e0e0e0;
+            --container-bg: #282828;
+            --primary-color: #4a90e2;
+            --success-color: #50e3c2;
+            --input-border: #444;
+            --box-bg: #333;
+            --error-color: #ff6b6b;
+            --shadow-color: rgba(0, 0, 0, 0.4);
+        }
+
+        body { 
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+            background-color: var(--bg-color); 
+            color: var(--text-color); 
+            padding: 20px; 
+            display: flex; 
+            flex-direction: column;
+            justify-content: center; 
+            align-items: center; 
+            min-height: 100vh; 
+            margin: 0; 
+        }
+        .container { 
+            background: var(--container-bg); 
+            padding: 30px; 
+            border-radius: 12px; 
+            box-shadow: 0 10px 25px var(--shadow-color); 
+            width: 100%; 
+            max-width: 500px; 
+        }
+        
+        h1 { 
+            color: var(--primary-color); 
+            text-align: center; 
+            margin-bottom: 20px; 
+        }
+        h2 {
+            font-size: 1.25rem;
+            color: var(--success-color);
+            margin-top: 20px;
+        }
+        h3 { 
+            color: var(--text-color); 
+            margin-top: 20px; 
+            margin-bottom: 10px; 
+        }
+        p {
+            margin: 5px 0;
+        }
+
+        input[type="text"], input[type="password"], select { 
+            width: 100%; 
+            padding: 10px; 
+            margin: 8px 0 15px 0; 
+            border: 1px solid var(--input-border); 
+            border-radius: 6px; 
+            box-sizing: border-box; 
+            font-size: 16px;
+            background-color: #383838;
+            color: var(--text-color);
+        }
+
+        .controls {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+        button { 
+            padding: 10px 20px; 
+            font-size: 16px; 
+            border: none; 
+            border-radius: 6px; 
+            cursor: pointer; 
+            transition: background-color 0.3s ease, transform 0.1s ease;
+            white-space: nowrap;
+        }
+        #decryptBtn {
+            background-color: var(--primary-color); 
+            color: var(--text-color); 
+            flex-grow: 1;
+        }
+        #decryptBtn:hover {
+            background-color: #3b74b6;
+            transform: translateY(-1px);
+        }
+        #sendBtn {
+            background-color: var(--success-color);
+            color: #1a1a1a;
+            font-weight: bold;
+        }
+        #sendBtn:hover {
+            background-color: #43c1a4;
+            transform: translateY(-1px);
+        }
+
+        #keyInput, #walletSection { 
+            border: 1px solid var(--input-border); 
+            background: var(--box-bg);
+            padding: 20px; 
+            margin-top: 20px; 
+            border-radius: 8px; 
+        }
+        #log { 
+            background: #222; 
+            padding: 10px; 
+            white-space: pre-wrap; 
+            font-family: monospace;
+            border-radius: 6px;
+            overflow-x: auto;
+            color: #ccc;
+            border: 1px solid #444;
+        }
+        hr {
+            border-color: #444;
+            margin: 20px 0;
+        }
+        .label-group {
+            display: flex;
+            flex-direction: column;
+            width: 100%;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1 id="Header">🔓 Decrypt Wallet Key</h1>
+
+    <p id="subtext">Please enter the password and select the network.</p>
+
+    <div id="keyInput">
+        <div class="label-group">
+            <label for="networkSelector">Select Network:</label>
+            <select id="networkSelector">
+                <option value="mainnet">Ethereum Mainnet</option>
+                <option value="sepolia">Sepolia Testnet</option>
+                <option value="matic">Polygon Mainnet</option>
+                <option value="amoy">Amoy Testnet</option>
+                <option value="arbitrum">Arbitrum Mainnet</option>
+                <option value="base">Base Mainnet</option>
+            </select>
+        </div>
+
+        <input type="password" id="password" placeholder="Enter Decryption Password">
+        <button id="decryptBtn" onclick="decryptAndLoadWallet()">Decrypt & Load Wallet</button>
+    </div>
+
+    <div id="walletSection" style="display: none;">
+        <h2>Wallet Details</h2>
+        <p><strong>Network:</strong> <span id="currentNetwork"></span></p>
+        <p><strong>Address:</strong> <span id="addr"></span></p>
+        <p><strong>Balance:</strong> <span id="bal">Loading...</span></p>
+
+        <hr>
+        
+        <h2>Send Transaction</h2>
+        <input type="text" id="to" placeholder="Recipient address (0x...)">
+        <input type="text" id="amount" placeholder="Amount in ETH/MATIC/etc. (e.g., 0.01)">
+        <button id="sendBtn" onclick="sendTx()">Send Transaction</button>
+
+        <h3>Log</h3>
+        <pre id="log">Awaiting wallet decryption...</pre>
+    </div>
+</div>
+
+<script>
+
+const urlParams = new URLSearchParams(window.location.search);
+if (!urlParams.has('key')) {
+    window.location.href = 'create.html';
+}
+
+const BASE62 = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+const ITERATIONS = 131072; 
+const SALT_SIZE = 16;
+const IV_SIZE = 16;
+
+let wallet = null;
+let provider = null;
+let balanceRefreshInterval = null;
+
+function base62ToArrayBuffer(str) {
+    let result = 0n;
+    for (const c of str) {
+        const v = BigInt(BASE62.indexOf(c));
+        if (v < 0n) throw new Error("Invalid Base62 character");
+        result = result * 62n + v;
+    }
+
+    let hex = result.toString(16);
+    if (hex.length % 2 !== 0) hex = '0' + hex; 
+    
+    const len = hex.length / 2;
+    const buffer = new Uint8Array(len);
+    for (let i = 0; i < len; i++) {
+        buffer[i] = parseInt(hex.substring(i * 2, i * 2 + 2), 16);
+    }
+
+    const expectedLength = SALT_SIZE + IV_SIZE + 32;
+    if (buffer.byteLength < expectedLength) {
+        const newBuffer = new Uint8Array(expectedLength);
+        newBuffer.set(buffer, expectedLength - buffer.byteLength);
+        return newBuffer.buffer;
+    }
+
+    return buffer.buffer;
+}
+
+async function decryptKey(base62Encrypted, password) {
+    const combinedBuffer = base62ToArrayBuffer(base62Encrypted);
+
+    const salt = combinedBuffer.slice(0, SALT_SIZE);
+    const iv = combinedBuffer.slice(SALT_SIZE, SALT_SIZE + IV_SIZE);
+    const ciphertext = combinedBuffer.slice(SALT_SIZE + IV_SIZE);
+
+    const passwordKey = await crypto.subtle.importKey(
+        "raw",
+        new TextEncoder().encode(password),
+        { name: "PBKDF2" },
+        false,
+        ["deriveKey"]
+    );
+
+    const derivedKey = await crypto.subtle.deriveKey(
+        {
+            name: "PBKDF2",
+            salt: salt,
+            iterations: ITERATIONS,
+            hash: "SHA-256",
+        },
+        passwordKey,
+        { name: "AES-CBC", length: 256 },
+        false,
+        ["decrypt"]
+    );
+
+    const decryptedBuffer = await crypto.subtle.decrypt(
+        { name: "AES-CBC", iv: new Uint8Array(iv) },
+        derivedKey,
+        ciphertext
+    );
+
+    const decryptedKeyBytes = new Uint8Array(decryptedBuffer);
+    let hexKey = '0x' + Array.from(decryptedKeyBytes)
+        .map(b => b.toString(16).padStart(2, '0'))
+        .join('');
+
+    return hexKey;
+}
+
+const params = new URLSearchParams(window.location.search);
+const base62EncryptedKey = params.get("key");
+
+if (!base62EncryptedKey) {
+    document.getElementById("log").textContent = "Error: No Base62 key found in the URL query parameter (?key=...). Cannot proceed.";
+}
+
+function getProvider(networkName) {
+    switch(networkName) {
+        case 'mainnet':
+            return new ethers.JsonRpcProvider('https://eth.drpc.org');
+        case 'sepolia':
+            return new ethers.JsonRpcProvider(`https://sepolia.drpc.org`); 
+        case 'matic':
+            return new ethers.JsonRpcProvider('https://polygon.drpc.org');
+        case 'amoy':
+            return new ethers.JsonRpcProvider('https://polygon-amoy.drpc.org');
+        case 'arbitrum':
+            return new ethers.JsonRpcProvider('https://arbitrum.drpc.org');
+        case 'base':
+            return new ethers.JsonRpcProvider('https://base.drpc.org');
+        default:
+            throw new Error(`Unsupported network: ${networkName}`);
+    }
+}
+
+function startBalanceRefresh() {
+    if (balanceRefreshInterval) {
+        clearInterval(balanceRefreshInterval);
+    }
+    balanceRefreshInterval = setInterval(loadBalance, 30000);
+    console.log("Balance refresh started (30s interval).");
+}
+
+function stopBalanceRefresh() {
+    if (balanceRefreshInterval) {
+        clearInterval(balanceRefreshInterval);
+        balanceRefreshInterval = null;
+        console.log("Balance refresh stopped.");
+    }
+}
+
+function capitalizeFirstLetter(val) {
+    return String(val).charAt(0).toUpperCase() + String(val).slice(1);
+}
+
+
+async function decryptAndLoadWallet() {
+    const password = document.getElementById("password").value;
+    const networkSelector = document.getElementById("networkSelector");
+    const networkName = networkSelector.value;
+    const decryptBtn = document.getElementById("decryptBtn");
+    
+    if (!password) {
+        document.getElementById("log").textContent = "Error: Please enter the decryption password.";
+        return;
+    }
+    if (!base62EncryptedKey) {
+        return;
+    }
+
+    decryptBtn.disabled = true;
+    decryptBtn.textContent = "Decrypting...";
+    document.getElementById("log").textContent = `Attempting to decrypt key for ${networkName}...`;
+    stopBalanceRefresh();
+
+    try {
+        const decryptedKey = await decryptKey(base62EncryptedKey, password);
+        
+        provider = getProvider(networkName);
+        wallet = new ethers.Wallet(decryptedKey, provider);
+        
+        document.getElementById("keyInput").style.display = 'none';
+        document.getElementById("walletSection").style.display = 'block';
+        document.getElementById("currentNetwork").textContent = networkSelector.options[networkSelector.selectedIndex].text;
+        document.getElementById("addr").textContent = wallet.address;
+        
+        loadBalance();
+        startBalanceRefresh();
+        document.getElementById("subtext").remove();
+        document.getElementById("Header").textContent = `${capitalizeFirstLetter(networkName)} Wallet`;
+        document.getElementById("log").textContent = `Wallet successfully loaded on ${networkName}! Address: ${wallet.address}`;
+
+    } catch (err) {
+        document.getElementById("log").textContent = `Decryption/Initialization Error:\n${err.message}\n\n(Ensure the password is correct and the network name is valid.)`;
+        console.error("Decryption/Wallet Error:", err);
+    } finally {
+        decryptBtn.disabled = false;
+        decryptBtn.textContent = "Decrypt & Load Wallet";
+    }
+}
+
+
+async function loadBalance() {
+    if (!wallet || !provider) return;
+    document.getElementById("bal").textContent = "Fetching...";
+    try {
+        const maxRetries = 5;
+        let bal;
+        for (let i = 0; i < maxRetries; i++) {
+            try {
+                bal = await provider.getBalance(wallet.address);
+                break;
+            } catch (e) {
+                if (i === maxRetries - 1) throw e;
+                const delay = Math.pow(2, i) * 1000;
+                await new Promise(resolve => setTimeout(resolve, delay));
+            }
+        }
+        
+        const networkName = document.getElementById("networkSelector").value;
+        let symbol = 'ETH';
+        if (networkName === 'matic' || networkName === 'amoy') {
+            symbol = 'POL';
+        } else if (networkName === 'base') {
+            symbol = 'ETH (Base)';
+        } else if (networkName === 'arbitrum') {
+            symbol = 'ARB';
+        }
+
+        document.getElementById("bal").textContent = ethers.formatEther(bal) + ` ${symbol}`;
+    } catch (err) {
+        document.getElementById("bal").textContent = "Error loading balance.";
+        console.error("Balance loading error:", err);
+    }
+}
+
+async function sendTx() {
+    if (!wallet) {
+        document.getElementById("log").textContent = "Error: Wallet not loaded. Please decrypt the key first.";
+        return;
+    }
+    
+    stopBalanceRefresh();
+    
+    try {
+        const to = document.getElementById("to").value.trim();
+        const amount = document.getElementById("amount").value.trim();
+
+        if (!to || !amount) {
+            document.getElementById("log").textContent = "Error: Recipient and amount are required.";
+            return;
+        }
+
+        document.getElementById("log").textContent = "Submitting transaction...";
+
+        const tx = await wallet.sendTransaction({
+            to,
+            value: ethers.parseEther(amount)
+        });
+
+        document.getElementById("log").textContent =
+            "Transaction submitted (Waiting for confirmation)";
+
+        const receipt = await tx.wait();
+
+        document.getElementById("log").textContent += 
+            "\nTransaction mined successfully!";
+
+        loadBalance();
+        startBalanceRefresh();
+
+    } catch (err) {
+        document.getElementById("log").textContent = "Transaction Error:\n" + (err.message || "An unknown error occurred.");
+        console.error(err);
+        startBalanceRefresh();
+    }
+}
+</script>
+
+</body>
+</html>

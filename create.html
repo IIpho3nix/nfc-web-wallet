@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Create Base62 Encrypted Wallet Key</title>
+    <script src="https://cdn.jsdelivr.net/npm/ethers@6.10.0/dist/ethers.umd.min.js"></script>
+    <style>
+      :root {
+        --bg-color: #1a1a1a;
+        --text-color: #e0e0e0;
+        --container-bg: #282828;
+        --primary-color: #4a90e2;
+        --success-color: #50e3c2;
+        --input-border: #444;
+        --box-bg: #333;
+        --note-color: #ffcc00;
+        --shadow-color: rgba(0, 0, 0, 0.4);
+      }
+
+      body {
+        font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+        background-color: var(--bg-color);
+        color: var(--text-color);
+        padding: 20px;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        min-height: 100vh;
+        margin: 0;
+      }
+      .container {
+        background: var(--container-bg);
+        padding: 30px;
+        border-radius: 12px;
+        box-shadow: 0 10px 25px var(--shadow-color);
+        width: 100%;
+        max-width: 500px;
+      }
+
+      h1 {
+        color: var(--primary-color);
+        text-align: center;
+        margin-bottom: 30px;
+      }
+      h3 {
+        color: var(--text-color);
+        margin-top: 20px;
+        margin-bottom: 10px;
+      }
+
+      input[type="password"] {
+        width: 100%;
+        padding: 12px;
+        margin-bottom: 20px;
+        border: 1px solid var(--input-border);
+        border-radius: 6px;
+        box-sizing: border-box;
+        font-size: 16px;
+        background-color: #383838;
+        color: var(--text-color);
+      }
+
+      button {
+        padding: 12px 25px;
+        font-size: 16px;
+        margin-right: 10px;
+        border: none;
+        border-radius: 6px;
+        cursor: pointer;
+        transition: background-color 0.3s ease, transform 0.1s ease;
+        width: 100%;
+      }
+      #generateBtn {
+        background-color: var(--success-color);
+        color: #1a1a1a;
+        font-weight: bold;
+      }
+      #generateBtn:hover {
+        background-color: #43c1a4;
+        transform: translateY(-1px);
+      }
+
+      #box {
+        background: var(--box-bg);
+        padding: 20px;
+        margin-top: 30px;
+        border-radius: 8px;
+        border-left: 5px solid var(--primary-color);
+      }
+      #resultText {
+        background: #222;
+        padding: 15px;
+        border-radius: 6px;
+        border: 1px dashed var(--success-color);
+        word-break: break-all;
+        margin-bottom: 15px;
+        font-size: 14px;
+      }
+      .success {
+        color: var(--success-color);
+        font-weight: bold;
+        text-align: center;
+        margin-top: 15px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <h1>🔑 Encrypted Key Generator</h1>
+
+      <div>
+        <input
+          type="password"
+          id="password"
+          placeholder="Enter Encryption Password (required)"
+          required
+        />
+        <button id="generateBtn" onclick="createKey()">
+          Generate & Encrypt Key
+        </button>
+      </div>
+
+      <div id="box" style="display: none">
+        <h3>🔗 Encrypted Wallet Link (Copied to Clipboard!):</h3>
+        <p id="resultText"></p>
+        <p class="success" id="copySuccess"></p>
+      </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/ethers@6.15.0/dist/ethers.umd.min.js"></script>
+    <script>
+      const BASE62 =
+        "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+      const ITERATIONS = 131072;
+      const SALT_SIZE = 16;
+      const IV_SIZE = 16;
+
+      function arrayBufferToBase62(buffer) {
+        const bytes = new Uint8Array(buffer);
+        let hex = Array.from(bytes)
+          .map((b) => b.toString(16).padStart(2, "0"))
+          .join("");
+        const big = BigInt("0x" + hex);
+
+        let res = "";
+        let x = big;
+
+        if (x === 0n) return BASE62[0];
+
+        while (x > 0n) {
+          const remainder = x % 62n;
+          res = BASE62[Number(remainder)] + res;
+          x = x / 62n;
+        }
+
+        return res;
+      }
+
+      function hexToBuffer(hex) {
+        hex = hex.replace(/^0x/, "");
+        const len = hex.length / 2;
+        const buffer = new Uint8Array(len);
+        for (let i = 0; i < len; i++) {
+          buffer[i] = parseInt(hex.substring(i * 2, i * 2 + 2), 16);
+        }
+        return buffer;
+      }
+
+      async function encryptKey(privateKeyHex, password) {
+        const salt = crypto.getRandomValues(new Uint8Array(SALT_SIZE));
+        const iv = crypto.getRandomValues(new Uint8Array(IV_SIZE));
+
+        const passwordKey = await crypto.subtle.importKey(
+          "raw",
+          new TextEncoder().encode(password),
+          { name: "PBKDF2" },
+          false,
+          ["deriveKey"]
+        );
+
+        const derivedKey = await crypto.subtle.deriveKey(
+          {
+            name: "PBKDF2",
+            salt: salt,
+            iterations: ITERATIONS,
+            hash: "SHA-256",
+          },
+          passwordKey,
+          { name: "AES-CBC", length: 256 },
+          false,
+          ["encrypt"]
+        );
+
+        const keyBuffer = hexToBuffer(privateKeyHex);
+
+        const ciphertext = await crypto.subtle.encrypt(
+          { name: "AES-CBC", iv: iv },
+          derivedKey,
+          keyBuffer
+        );
+
+        const combined = new Uint8Array(
+          salt.byteLength + iv.byteLength + ciphertext.byteLength
+        );
+        combined.set(salt, 0);
+        combined.set(iv, salt.byteLength);
+        combined.set(
+          new Uint8Array(ciphertext),
+          salt.byteLength + iv.byteLength
+        );
+
+        return arrayBufferToBase62(combined.buffer);
+      }
+
+      async function createKey() {
+        const passwordInput = document.getElementById("password");
+        const password = passwordInput.value;
+        const resultBox = document.getElementById("box");
+        const resultText = document.getElementById("resultText");
+        const copySuccess = document.getElementById("copySuccess");
+        const generateBtn = document.getElementById("generateBtn");
+
+        if (!password) {
+          alert("Please enter an encryption password.");
+          passwordInput.focus();
+          return;
+        }
+
+        generateBtn.disabled = true;
+        generateBtn.textContent = "Encrypting...";
+        resultBox.style.display = "none";
+        copySuccess.textContent = "";
+
+        try {
+          const wallet = ethers.Wallet.createRandom();
+          const hexKey = wallet.privateKey;
+
+          const base62Encrypted = await encryptKey(hexKey, password);
+
+          const fullPath = window.location.pathname;
+          const directoryPath = fullPath.substring(
+            0,
+            fullPath.lastIndexOf("/") + 1
+          );
+          const domain =
+            window.location.protocol +
+            "//" +
+            window.location.host +
+            directoryPath;
+
+          const link = domain + "index.html?key=" + base62Encrypted;
+
+          resultText.textContent = link;
+          resultBox.style.display = "block";
+
+          await navigator.clipboard.writeText(link);
+          copySuccess.textContent =
+            "✅ Link successfully copied to your clipboard!";
+        } catch (error) {
+          console.error("Encryption failed:", error);
+          alert(
+            "An error occurred during key generation/encryption. Check the console for details."
+          );
+        } finally {
+          generateBtn.disabled = false;
+          generateBtn.textContent = "Generate & Encrypt Key";
+        }
+      }
+    </script>
+  </body>
+</html>
