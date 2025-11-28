@@ -253,9 +253,13 @@
           resultText.textContent = link;
           resultBox.style.display = "block";
 
-          await navigator.clipboard.writeText(link);
           copySuccess.textContent =
             "✅ Link successfully copied to your clipboard!";
+          try {
+            await navigator.clipboard.writeText(link);
+          } catch (error) {
+            copySuccess.textContent = "❌ Failed to copy link to clipboard.";
+          }
         } catch (error) {
           console.error("Encryption failed:", error);
           alert(
